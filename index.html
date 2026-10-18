@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>まち散歩3D</title>
+<meta name="description" content="OpenStreetMap の地図データから、街の建物を3Dで立ち上げて歩きまわれるページ">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 画面いっぱいの街。上に「行き先」のバー、右上に小さな地図、左下にスティック。UI は街の景色をじゃましない半透明のガラス */
+:root {
+  --glass: rgba(18, 22, 30, .62);
+  --glass-line: rgba(255, 255, 255, .14);
+  --ink: #eef2f7;
+  --muted: #a9b3c2;
+  --acc: #ffc65c;
+  --acc-ink: #2a1f05;
+  --bad: #ff8a7a;
+  --f-body: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #10141c; color: var(--ink); font-family: var(--f-body); overflow: hidden; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+#cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.glass { background: var(--glass); border: 1px solid var(--glass-line); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-radius: 14px; }
+.top { position: fixed; z-index: 3; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); top: calc(10px + env(safe-area-inset-top, 0px)); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; }
+.top h1 { font-size: 17px; margin: 0 6px 0 2px; white-space: nowrap; letter-spacing: .06em; }
+.top form { display: flex; gap: 6px; flex: 1 1 240px; min-width: 0; }
+.top input { flex: 1; min-width: 0; border: 1px solid var(--glass-line); background: rgba(0, 0, 0, .3); border-radius: 10px; padding: 6px 10px; }
+.btn { border: 1px solid var(--acc); background: var(--acc); color: var(--acc-ink); border-radius: 10px; padding: 6px 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--glass-line); font-weight: 500; }
+.seg { display: inline-flex; border: 1px solid var(--glass-line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: none; padding: 6px 10px; cursor: pointer; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--acc); color: var(--acc-ink); font-weight: 700; }
+.status { position: fixed; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 14px 20px; text-align: center; max-width: min(420px, calc(100% - 32px)); }
+.status p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.status.err b { color: var(--bad); }
+.mini { position: fixed; z-index: 2; right: max(12px, env(safe-area-inset-right, 0px)); top: calc(76px + env(safe-area-inset-top, 0px)); width: 150px; height: 150px; padding: 0; overflow: hidden; cursor: pointer; }
+.mini canvas { width: 100%; height: 100%; display: block; }
+.place { position: fixed; z-index: 2; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(76px + env(safe-area-inset-top, 0px)); padding: 6px 12px; font-size: 13px; }
+.place b { font-size: 15px; }
+.help { position: fixed; z-index: 2; left: max(12px, env(safe-area-inset-left, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); padding: 8px 12px; font-size: 12px; color: var(--muted); max-width: 300px; }
+.help kbd { font-family: var(--f-num); background: rgba(255, 255, 255, .1); border-radius: 4px; padding: 0 4px; color: var(--ink); }
+.attr { position: fixed; z-index: 2; right: max(8px, env(safe-area-inset-right, 0px)); bottom: calc(6px + env(safe-area-inset-bottom, 0px)); font-size: 11px; color: var(--muted); background: rgba(0, 0, 0, .45); padding: 2px 8px; border-radius: 6px; }
+.attr a { color: var(--ink); }
+.stick { position: fixed; z-index: 3; left: max(20px, env(safe-area-inset-left, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: 120px; height: 120px; border-radius: 50%; touch-action: none; }
+.stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(255, 255, 255, .28); border: 1px solid rgba(255, 255, 255, .4); }
+.tools { position: fixed; z-index: 3; right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(34px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.tools .btn { min-width: 44px; min-height: 44px; }
+@media (max-width: 640px) { .top h1 { display: none; } .mini { width: 110px; height: 110px; } .help { display: none; } }
+@media (pointer: fine) { .stick { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="cv" aria-label="3Dの街"></canvas>
+<div class="top glass">
+  <h1>まち散歩3D</h1>
+  <form id="search" role="search"><input id="q" placeholder="行きたい場所（例：横浜駅、渋谷スクランブル交差点）" aria-label="行きたい場所" maxlength="80"><button class="btn" type="submit">行く</button></form>
+  <div class="seg" role="group" aria-label="時間"><button data-time="day" aria-pressed="false">昼</button><button data-time="dusk" aria-pressed="false">夕方</button><button data-time="night" aria-pressed="true">夜</button></div>
+</div>
+<div class="place glass" id="place" hidden></div>
+<div class="mini glass" id="mini" title="地図をタップすると、その場所へ移動" hidden><canvas id="mcv" width="300" height="300"></canvas></div>
+<div class="status glass" id="status"><b>街を読みこんでいます…</b><p>OpenStreetMap から建物と道のデータを取ってきます</p></div>
+<div class="help glass" id="help"><kbd>W A S D</kbd>／<kbd>↑↓←→</kbd> 歩く　<kbd>Shift</kbd> 走る　ドラッグで見まわす　<kbd>F</kbd> 空から見る</div>
+<div class="stick" id="stick" aria-hidden="true"><i id="knob"></i></div>
+<div class="tools">
+  <button class="btn ghost glass" id="fly" aria-pressed="false">空から見る</button>
+  <button class="btn ghost glass" id="ghost" aria-pressed="false">建物を通りぬけ：オフ</button>
+</div>
+<div class="attr">地図データ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const START = { name: 'みなとみらい', lat: 35.4560, lon: 139.6326 };
+const RADIUS = 450;
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+
+// ---------- three.js の準備 ----------
+const renderer = new THREE.WebGLRenderer({ canvas: $('#cv'), antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 4000);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(-300, 500, 200); scene.add(sun);
+scene.fog = new THREE.Fog(0x000000, 200, 1100);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), new THREE.MeshLambertMaterial({ color: 0x3a3f3a }));
+ground.rotation.x = -Math.PI / 2; scene.add(ground);
+let city = new THREE.Group(); scene.add(city);
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+// 窓の模様（夜は光る）
+function windowTex(lit) {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64; const g = c.getContext('2d');
+  g.fillStyle = lit ? '#000' : '#eef1f4'; g.fillRect(0, 0, 64, 64);
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+    const on = lit ? Math.random() < 0.55 : true;
+    g.fillStyle = lit ? (on ? ['#ffd890', '#ffe9b8', '#cfe3ff'][(Math.random() * 3) | 0] : '#000') : '#7d8a98';
+    g.fillRect(6 + i * 32, 8 + j * 32, 20, 18);
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.NearestFilter; return t;
+}
+// 何枚か作って、建物ごとにばらす
+const DAYTEX = windowTex(false);
+const NIGHTTEX = [windowTex(true), windowTex(true), windowTex(true)];
+const wallMats = NIGHTTEX.map(nt => new THREE.MeshLambertMaterial({ vertexColors: true, map: DAYTEX, emissive: 0xffffff, emissiveMap: nt, emissiveIntensity: 0 }));
+const roofMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+
+// ---------- 地図データ ----------
+let origin = { lat: START.lat, lon: START.lon };
+const toXZ = (lat, lon) => ({ x: (lon - origin.lon) * Math.cos(origin.lat * Math.PI / 180) * 111320, z: -(lat - origin.lat) * 110540 });
+async function overpass(lat, lon, r) {
+  const q = `[out:json][timeout:40];(way["building"](around:${r},${lat},${lon});way["highway"](around:${r},${lat},${lon});way["natural"="water"](around:${r + 300},${lat},${lon});way["leisure"="park"](around:${r},${lat},${lon});way["landuse"~"grass|forest"](around:${r},${lat},${lon}););out geom;`;
+  let lastErr;
+  for (const url of OVERPASS) {
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 45000);
+      const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+      clearTimeout(tm);
+      if (!res.ok) throw new Error('http ' + res.status);
+      return await res.json();
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+const num = v => { const n = parseFloat(String(v || '').replace(',', '.')); return isFinite(n) ? n : null; };
+function heightOf(t) {
+  const h = num(t.height); if (h) return Math.min(h, 400);
+  const lv = num(t['building:levels']); if (lv) return Math.min(lv * 3.3 + 1, 400);
+  if (/^(house|detached|bungalow|garage|shed|hut|roof)$/.test(t.building)) return t.building === 'roof' ? 4 : 7;
+  if (/^(apartments|residential)$/.test(t.building)) return 18;
+  if (/^(commercial|office|retail|hotel)$/.test(t.building)) return 24;
+  return 11;
+}
+const ROADW = { motorway: 14, trunk: 12, primary: 11, secondary: 9, tertiary: 8, residential: 6, unclassified: 6, service: 4, living_street: 5, pedestrian: 6, footway: 2.4, path: 2, cycleway: 2.4, steps: 2.4 };
+
+// ---------- 街を組み立てる ----------
+let BLD = [];          // 当たり判定用：{ pts:[[x,z]...], minx, maxx, minz, maxz }
+const GRID = new Map(), CELL = 25;
+function buildCity(data) {
+  scene.remove(city); city.traverse(o => o.geometry && o.geometry.dispose()); city = new THREE.Group(); scene.add(city);
+  BLD = []; GRID.clear();
+  const walls = [0, 1, 2].map(() => ({ p: [], n: [], uv: [], c: [] })), roofs = { p: [], n: [], c: [] }, flats = { road: { p: [], c: [] }, water: { p: [], c: [] }, green: { p: [], c: [] } };
+  const col = new THREE.Color();
+  for (const el of data.elements || []) {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+    const t = el.tags || {};
+    let pts = el.geometry.map(g => { const p = toXZ(g.lat, g.lon); return [p.x, p.z]; });
+    if (t.building && pts.length >= 4) {
+      if (pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1]) pts.pop();
+      if (pts.length < 3) continue;
+      // 向きをそろえる（外向きの法線のため、反時計回りに）
+      let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; }
+      if (a > 0) pts.reverse();
+      const h = heightOf(t), base = num(t.min_height) || 0;
+      const hue = (el.id * 0.137) % 1, tint = t.building === 'house' || t.building === 'detached' ? [0.07, 0.25, 0.72] : [0.58 + hue * 0.08, 0.06 + hue * 0.08, 0.62 + (el.id % 7) * 0.035];
+      col.setHSL(tint[0], tint[1], tint[2]);
+      const W = walls[el.id % 3];
+      let u = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i], q = pts[(i + 1) % pts.length], len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (len < 0.01) continue;
+        const nx = (q[1] - p[1]) / len, nz = -(q[0] - p[0]) / len;
+        const u0 = u / 4, u1 = (u + len) / 4, v0 = base / 3.3, v1 = h / 3.3; u += len;
+        const quad = [[p[0], base, p[1], u0, v0], [q[0], base, q[1], u1, v0], [q[0], h, q[1], u1, v1], [p[0], base, p[1], u0, v0], [q[0], h, q[1], u1, v1], [p[0], h, p[1], u0, v1]];
+        for (const v of quad) { W.p.push(v[0], v[1], v[2]); W.n.push(nx, 0, nz); W.uv.push(v[3], v[4]); W.c.push(col.r, col.g, col.b); }
+      }
+      const tri = THREE.ShapeUtils.triangulateShape(pts.map(p => new THREE.Vector2(p[0], p[1])), []);
+      col.offsetHSL(0, 0, -0.12);
+      for (const f of tri) for (const k of [f[0], f[2], f[1]]) { roofs.p.push(pts[k][0], h, pts[k][1]); roofs.n.push(0, 1, 0); roofs.c.push(col.r, col.g, col.b); }
+      if (h > 2.5 && t.building !== 'roof') {
+        const b = { pts, minx: Math.min(...pts.map(p => p[0])), maxx: Math.max(...pts.map(p => p[0])), minz: Math.min(...pts.map(p => p[1])), maxz: Math.max(...pts.map(p => p[1])), h };
+        BLD.push(b);
+        for (let gx = Math.floor(b.minx / CELL); gx <= Math.floor(b.maxx / CELL); gx++) for (let gz = Math.floor(b.minz / CELL); gz <= Math.floor(b.maxz / CELL); gz++) { const k = gx + ',' + gz; if (!GRID.has(k)) GRID.set(k, []); GRID.get(k).push(b); }
+      }
+    } else if (t.highway) {
+      const w = (ROADW[t.highway] || 4) / 2, y = /footway|path|cycleway|steps|pedestrian/.test(t.highway) ? 0.04 : 0.03;
+      const c = /footway|path|cycleway|steps|pedestrian/.test(t.highway) ? [0.52, 0.5, 0.46] : [0.2, 0.21, 0.23];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const p = pts[i], q = pts[i + 1], len = Math.hypot(q[0] - p[0], q[1] - p[1]); if (len < 0.01) continue;
+        const ox = -(q[1] - p[1]) / len * w, oz = (q[0] - p[0]) / len * w;
+        const A = [p[0] + ox, y, p[1] + oz], B = [q[0] + ox, y, q[1] + oz], C = [q[0] - ox, y, q[1] - oz], D = [p[0] - ox, y, p[1] - oz];
+        for (const v of [A, C, B, A, D, C]) { flats.road.p.push(...v); flats.road.c.push(...c); }
+      }
+    } else if (pts.length >= 4 && (t.natural === 'water' || t.leisure === 'park' || t.landuse)) {
+      if (pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1]) pts.pop();
+      const F = t.natural === 'water' ? flats.water : flats.green, c = t.natural === 'water' ? [0.12, 0.24, 0.36] : [0.22, 0.36, 0.22], y = t.natural === 'water' ? 0.01 : 0.02;
+      const tri = THREE.ShapeUtils.triangulateShape(pts.map(p => new THREE.Vector2(p[0], p[1])), []);
+      for (const f of tri) for (const k of [f[0], f[2], f[1]]) { F.p.push(pts[k][0], y, pts[k][1]); F.c.push(...c); }
+    }
+  }
+  const mk = (o, mat, uvs) => {
+    if (!o.p.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(o.p, 3));
+    if (o.n) g.setAttribute('normal', new THREE.Float32BufferAttribute(o.n, 3)); else g.computeVertexNormals();
+    if (uvs) g.setAttribute('uv', new THREE.Float32BufferAttribute(o.uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(o.c, 3));
+    city.add(new THREE.Mesh(g, mat));
+  };
+  walls.forEach((W, i) => mk(W, wallMats[i], true));
+  mk(roofs, roofMat);
+  const flatMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  mk(flats.water, flatMat); mk(flats.green, flatMat); mk(flats.road, flatMat);
+  drawMiniBase(data);
+  return BLD.length;
+}
+
+// ---------- 時間（昼・夕方・夜） ----------
+let TIME = 'night';
+function setTime(t) {
+  TIME = t;
+  document.querySelectorAll('[data-time]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.time === t)));
+  const P = {
+    day: { sky: 0xa9c8e8, fog: 0xc4d6e8, hemi: 0.75, sun: 0.9, sunC: 0xffffff, em: 0, ground: 0x4c534a },
+    dusk: { sky: 0xe39a6c, fog: 0x9d7a78, hemi: 0.45, sun: 0.7, sunC: 0xffb070, em: 0.35, ground: 0x3c3a36 },
+    night: { sky: 0x0b1020, fog: 0x0b1020, hemi: 0.18, sun: 0.12, sunC: 0x8899cc, em: 1.0, ground: 0x1d2024 },
+  }[t];
+  scene.background = new THREE.Color(P.sky); scene.fog.color.setHex(P.fog);
+  hemi.intensity = P.hemi; sun.intensity = P.sun; sun.color.setHex(P.sunC); ground.material.color.setHex(P.ground);
+  wallMats.forEach(m => { m.emissiveIntensity = P.em; m.map = t === 'night' ? null : DAYTEX; m.needsUpdate = true; });
+}
+document.querySelectorAll('[data-time]').forEach(b => b.addEventListener('click', () => setTime(b.dataset.time)));
+
+// ---------- 歩く ----------
+const P = { x: 0, z: 0, y: 1.6, yaw: 0, pitch: 0, fly: false, ghost: false };
+const keys = new Set();
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  keys.add(e.key.toLowerCase());
+  if (e.key === 'f' || e.key === 'F') toggleFly();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
+// ドラッグで見まわす（スティック以外の場所）
+let drag = null;
+$('#cv').addEventListener('pointerdown', e => { drag = { id: e.pointerId, x: e.clientX, y: e.clientY }; $('#cv').setPointerCapture(e.pointerId); });
+$('#cv').addEventListener('pointermove', e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  P.yaw -= (e.clientX - drag.x) * 0.0045; P.pitch = Math.max(-1.2, Math.min(1.1, P.pitch - (e.clientY - drag.y) * 0.0045));
+  drag.x = e.clientX; drag.y = e.clientY;
+});
+const endDrag = e => { if (drag && drag.id === e.pointerId) drag = null; };
+$('#cv').addEventListener('pointerup', endDrag); $('#cv').addEventListener('pointercancel', endDrag);
+// スティック（スマホ）
+const stick = { x: 0, y: 0, id: null };
+$('#stick').addEventListener('pointerdown', e => { stick.id = e.pointerId; $('#stick').setPointerCapture(e.pointerId); moveStick(e); e.preventDefault(); });
+$('#stick').addEventListener('pointermove', e => { if (e.pointerId === stick.id) moveStick(e); });
+const upStick = e => { if (e.pointerId !== stick.id) return; stick.id = null; stick.x = stick.y = 0; $('#knob').style.transform = ''; };
+$('#stick').addEventListener('pointerup', upStick); $('#stick').addEventListener('pointercancel', upStick);
+function moveStick(e) {
+  const r = $('#stick').getBoundingClientRect(); let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const m = r.width * 0.36, l = Math.hypot(dx, dy); if (l > m) { dx *= m / l; dy *= m / l; }
+  $('#knob').style.transform = `translate(${dx}px, ${dy}px)`; stick.x = dx / m; stick.y = dy / m;
+}
+function toggleFly() {
+  P.fly = !P.fly; $('#fly').setAttribute('aria-pressed', String(P.fly)); $('#fly').textContent = P.fly ? '歩いて見る' : '空から見る';
+  if (P.fly) P.pitch = -0.75; else P.pitch = 0;
+}
+$('#fly').addEventListener('click', toggleFly);
+$('#ghost').addEventListener('click', () => { P.ghost = !P.ghost; $('#ghost').setAttribute('aria-pressed', String(P.ghost)); $('#ghost').textContent = '建物を通りぬけ：' + (P.ghost ? 'オン' : 'オフ'); });
+function inside(b, x, z) {
+  if (x < b.minx || x > b.maxx || z < b.minz || z > b.maxz) return false;
+  let c = false; const p = b.pts;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) if ((p[i][1] > z) !== (p[j][1] > z) && x < (p[j][0] - p[i][0]) * (z - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) c = !c;
+  return c;
+}
+function blocked(x, z) {
+  if (P.ghost || P.fly) return false;
+  const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL), list = GRID.get(k) || [];
+  for (const b of list) { for (const [ox, oz] of [[0, 0], [0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35]]) if (inside(b, x + ox, z + oz)) return true; }
+  return false;
+}
+let last = performance.now();
+function loop(t) {
+  const dt = Math.min(0.05, (t - last) / 1000); last = t;
+  let f = 0, s = 0;
+  if (keys.has('w') || keys.has('arrowup')) f += 1;
+  if (keys.has('s') || keys.has('arrowdown')) f -= 1;
+  if (keys.has('a')) s -= 1;
+  if (keys.has('d')) s += 1;
+  if (keys.has('arrowleft')) P.yaw += 1.8 * dt;
+  if (keys.has('arrowright')) P.yaw -= 1.8 * dt;
+  f -= stick.y; s += stick.x;
+  const run = keys.has('shift') || Math.hypot(stick.x, stick.y) > 0.92;
+  const sp = (P.fly ? 40 : run ? 7 : 2.2) * dt;
+  if (f || s) {
+    const l = Math.max(1, Math.hypot(f, s)); f /= l; s /= l;
+    const dx = (-Math.sin(P.yaw) * f + Math.cos(P.yaw) * s) * sp, dz = (-Math.cos(P.yaw) * f - Math.sin(P.yaw) * s) * sp;
+    if (!blocked(P.x + dx, P.z)) P.x += dx;
+    if (!blocked(P.x, P.z + dz)) P.z += dz;
+  }
+  const ty = P.fly ? 140 : 1.6; P.y += (ty - P.y) * Math.min(1, dt * 3);
+  camera.position.set(P.x, P.y, P.z);
+  camera.rotation.set(0, 0, 0); camera.rotateY(P.yaw); camera.rotateX(P.pitch);
+  renderer.render(scene, camera);
+  drawMini();
+  requestAnimationFrame(loop);
+}
+
+// ---------- 小さな地図 ----------
+const mbase = document.createElement('canvas'); mbase.width = mbase.height = 600;
+const MS = 600 / (RADIUS * 2.4);
+function drawMiniBase(data) {
+  const g = mbase.getContext('2d'); g.fillStyle = '#1a1f27'; g.fillRect(0, 0, 600, 600);
+  const tx = x => 300 + x * MS, tz = z => 300 + z * MS;
+  for (const el of data.elements || []) {
+    if (!el.geometry) continue; const t = el.tags || {};
+    const pts = el.geometry.map(q => toXZ(q.lat, q.lon));
+    g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(tx(p.x), tz(p.z)) : g.moveTo(tx(p.x), tz(p.z)));
+    if (t.building) { g.fillStyle = '#6c7686'; g.fill(); }
+    else if (t.highway) { g.strokeStyle = /footway|path|steps/.test(t.highway) ? '#4a4f56' : '#a9b0b8'; g.lineWidth = Math.max(1, (ROADW[t.highway] || 4) * MS); g.stroke(); }
+    else if (t.natural === 'water') { g.fillStyle = '#25445e'; g.fill(); }
+    else { g.fillStyle = '#2c4a30'; g.fill(); }
+  }
+}
+function drawMini() {
+  if ($('#mini').hidden) return;
+  const c = $('#mcv'), g = c.getContext('2d'), k = 300 / 600 * 2;
+  g.save(); g.clearRect(0, 0, 300, 300);
+  g.translate(150, 150); g.scale(k / 2, k / 2);
+  g.drawImage(mbase, -300 - P.x * MS + 0, -300 - P.z * MS + 0, 600, 600);
+  g.restore();
+  g.save(); g.translate(150, 150); g.rotate(-P.yaw); g.fillStyle = '#ffc65c'; g.beginPath(); g.moveTo(0, -11); g.lineTo(7, 8); g.lineTo(-7, 8); g.closePath(); g.fill(); g.restore();
+}
+$('#mini').addEventListener('click', e => {
+  const r = $('#mini').getBoundingClientRect(), mx = (e.clientX - r.left) / r.width * 300 - 150, my = (e.clientY - r.top) / r.height * 300 - 150;
+  const nx = P.x + mx / MS, nz = P.z + my / MS;
+  if (!blocked(nx, nz)) { P.x = nx; P.z = nz; }
+});
+
+// ---------- 場所を読みこむ ----------
+async function go(place) {
+  status(`<b>${esc(place.name)} を読みこんでいます…</b><p>建物と道のデータを取ってきます（10〜30秒）</p>`);
+  origin = { lat: place.lat, lon: place.lon };
+  try {
+    const data = await overpass(place.lat, place.lon, RADIUS);
+    const n = buildCity(data);
+    P.x = 0; P.z = 0; P.yaw = 0; P.pitch = 0;
+    // 建物の中から始まらないように、近くの空いている場所をさがす
+    // 建物の中や、壁の目の前から始まらないように、まわり12mが空いている場所をさがして、検索した地点のほうを向く
+    const open = (x, z) => !blocked(x, z) && [...Array(12)].every((_, k) => !blocked(x + Math.cos(k / 12 * Math.PI * 2) * 12, z + Math.sin(k / 12 * Math.PI * 2) * 12));
+    found: for (let r = 0; r < 200; r += 6) for (let a = 0; a < 16; a++) { const x = Math.cos(a / 16 * Math.PI * 2) * r, z = Math.sin(a / 16 * Math.PI * 2) * r; if (open(x, z)) { P.x = x; P.z = z; break found; } }
+    if (Math.hypot(P.x, P.z) > 1) P.yaw = Math.atan2(P.x, P.z);
+    P.pitch = 0.12;
+    $('#place').hidden = false; $('#place').innerHTML = `<b>${esc(place.name)}</b><br><span style="color:var(--muted)">建物 ${n.toLocaleString()} 棟</span>`;
+    $('#mini').hidden = false;
+    status(null);
+    if (!n) status(`<b>このあたりには建物のデータがありませんでした</b><p>別の場所をさがしてみてください</p>`, true);
+    return n;
+  } catch (e) {
+    status(`<b>地図データを読みこめませんでした</b><p>地図のサーバーが混んでいるかもしれません。少し待ってから、もう一度「行く」を押してください。</p>`, true);
+    return -1;
+  }
+}
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function status(html, err) { const s = $('#status'); s.hidden = !html; if (html) { s.innerHTML = html; s.classList.toggle('err', !!err); } }
+$('#search').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = $('#q').value.trim(); if (!q) return;
+  $('#q').blur();
+  status(`<b>「${esc(q)}」をさがしています…</b>`);
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=ja&q=${encodeURIComponent(q)}`);
+    const a = await r.json();
+    if (!a.length) return status(`<b>「${esc(q)}」が見つかりませんでした</b><p>駅や建物の名前、住所で試してみてください</p>`, true);
+    go({ name: a[0].display_name.split(',')[0], lat: +a[0].lat, lon: +a[0].lon });
+  } catch (er) { status('<b>場所をさがせませんでした</b><p>通信を確かめて、もう一度試してください</p>', true); }
+});
+
+setTime('night');
+requestAnimationFrame(loop);
+go(START);
+window.MACHI = { P, go, blocked, scene, BLD: () => BLD, setTime };
+</script>
+</body>
+</html>
