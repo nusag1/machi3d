@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>まち散歩3D</title>
+<!-- pwa -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="まち散歩3D">
+<meta name="theme-color" content="#3b6ea8">
+<!-- /pwa -->
 <meta name="description" content="OpenStreetMap の地図データから、街の建物を3Dで立ち上げて歩きまわれるページ">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -382,5 +391,8 @@ requestAnimationFrame(loop);
 go(START);
 window.MACHI = { P, go, blocked, scene, BLD: () => BLD, setTime };
 </script>
+<!-- pwa -->
+<script>if ('serviceWorker' in navigator && location.protocol !== 'file:') addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));</script>
+<!-- /pwa -->
 </body>
 </html>
